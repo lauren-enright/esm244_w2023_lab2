@@ -1,0 +1,186 @@
+---
+title: "ESM 244 Lab 2"
+author: "L. Enright"
+date: "2023-01-19"
+output: html_document
+---
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(palmerpenguins)
+library(AICcmodavg)
+library(equatiomatic)
+```
+
+#Predicting Penguin Mass
+
+```{r}
+penguins_clean <- penguins %>%
+  drop_na() %>%
+  rename(mass = body_mass_g,
+         bill_l = bill_length_mm,
+         bill_d = bill_depth_mm,
+         flip_l = flipper_length_mm)
+
+#make a model! 
+mdl1 <- lm(mass ~ bill_l + bill_d + flip_l + species + sex + island, data = penguins_clean)
+
+# to check how good our model is, can do summary(mdl1) in the console to look 
+# some things to look at... (all else being equal)... males are heavier, chinstrap are smaller than adelie, but gentoo are bigger than adelie, etc. 
+# based on summary, this model will do a good job of predicting
+#can use AIC(mdl1) in console
+```
+
+```{r}
+#let's make the model an easier way 
+
+f1 <- mass ~ bill_l + bill_d + flip_l + species + sex + island
+#R will recongnize this as a formula 
+
+mdl1 <- lm(f1, data = penguins_clean)
+
+f2 <- mass ~ bill_l + bill_d + flip_l + species + sex
+#dropped the islands. when we looked at the summary from Model 1, island coefficients were not significant 
+
+mdl2 <- lm(f2, data = penguins_clean)
+
+f3 <- mass ~ bill_d + flip_l + species + sex
+# drop bill length
+
+mdl3 <- lm(f3, data = penguins_clean)
+
+AIC(mdl1, mdl2, mdl3)
+
+#this tells us that model 2 is the best (lowest AIC value)
+
+BIC(mdl1, mdl2, mdl3)
+
+AICcmodavg::AICc(mdl1)
+#the c is for correction -- mostly helpful for smaller sample sizes. our sample size is larger, which is why there was little change from the uncorrected AIC 
+
+aictab(list(mdl1, mdl2, mdl3))
+#makes a table
+
+bictab(list(mdl1, mdl2, mdl3))
+#makes a table
+#in this case, model 2 is not that much better than model 3
+```
+
+#compare models using k-fold cross validation 
+
+```{r}
+folds <- 10
+fold_vec <- rep(1:folds, length.out = nrow(penguins_clean))
+
+set.seed(42)
+#can use any number (42 is just an example) ! 
+# need to set the seed so your model is reproducable! 
+
+penguins_fold <- penguins_clean %>%
+  mutate(group = sample(fold_vec, size = n(), replace = FALSE))
+
+table(penguins_fold$group)
+
+test_df <- penguins_fold %>%
+  filter(group == 1)
+
+train_df <- penguins_fold %>%
+  filter(group != 1)
+
+
+```
+
+```{r}
+# how are we going to assess how well our model works? since this is a continueous variable, we want to make a function
+
+#example function
+calc_mean <- function(x) {
+  m <- sum(x)/length(x)
+}
+
+#function for our model
+calc_rmse <- function(x, y) {
+  rsme <- (x - y)^2 %>%
+    mean() %>%
+    sqrt()
+    return(rmse)
+}
+#the function above is written wrong
+
+
+calc_rmse_2 <- function(x, y) {
+  rmse <- (x - y)^2 %>% mean() %>% sqrt()
+  return(rmse)
+}
+
+#the function above is written correctly. unsure of the difference? 
+```
+
+```{r}
+training_mdl1 <- lm(f1, data = train_df)
+
+training_mdl2 <- lm(f2, data = train_df)
+
+training_mdl3 <- lm(f3, data = train_df)
+
+predict_test <- test_df %>%
+  mutate(model1 = predict(training_mdl1, test_df),
+         model2 = predict(training_mdl2, test_df),
+         model3 = predict(training_mdl3, test_df))
+
+rsme_predict_test <- predict_test %>%
+  summarize(rmse_mdl1 = calc_rmse_2(model1, mass),
+            rmse_mdl2 = calc_rmse_2(model2, mass),
+            rmse_mdl3 = calc_rmse_2(model3, mass))
+
+```
+
+#Let's iterate
+
+```{r}
+#loops
+
+rsme_df <- data.frame()
+
+for(i in 1:folds){
+  kfold_test_df <- penguins_fold %>%
+    filter(group == i)
+  kfold_train_df <- penguins_fold %>%
+    filter(group != i)
+  
+  kfold_mdl1 <- lm(f1, data = kfold_train_df)
+  kfold_mdl2 <- lm(f2, data = kfold_train_df)
+  kfold_mdl3 <- lm(f3, data = kfold_train_df)
+  
+  kfold_pred_df <- kfold_test_df %>%
+    mutate(mdl1 = predict(kfold_mdl1, .),
+           mdl2 = predict(kfold_mdl2, .),
+           mdl3 = predict(kfold_mdl3, .)) 
+  
+  kfold_rsme_df <- kfold_pred_df %>%
+    summarize(rmse_mdl1 = calc_rmse_2(mdl1, mass),
+            rmse_mdl2 = calc_rmse_2(mdl2, mass),
+            rmse_mdl3 = calc_rmse_2(mdl3, mass),
+            test_gp = i)
+  
+  rsme_df <- bind_rows(rsme_df, kfold_rsme_df)
+}
+
+rsme_df %>%
+  summarize(mean_rmse_mdl1 = mean(rmse_mdl1),
+            mean_rmse_mdl2 = mean(rmse_mdl2),
+            mean_rmse_mdl3 = mean(rmse_mdl3))
+```
+# finalize the model 
+
+```{r}
+final_mdl <- lm(f2, data = penguins_clean)
+```
+
+Our final model:
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE)`
+
+And with coefficients: 
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE, use_coefs = TRUE)`
